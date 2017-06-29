@@ -62,6 +62,12 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
  * the result of a query. Create using a {@link SqlBrite} instance.
  */
 public final class BriteDatabase implements Closeable {
+  private static final Function<Object, Object> TO_MARKER_OBJECT = new Function<Object, Object>() {
+    @Override public Object apply(Object ignored) {
+      return this; // This function is itself the marker object, because why not?
+    }
+  };
+
   private final SQLiteOpenHelper helper;
   private final Logger logger;
   private final ObservableTransformer<Query, Query> queryTransformer;
@@ -320,16 +326,7 @@ public final class BriteDatabase implements Closeable {
   @CheckResult @NonNull
   public QueryObservable createQuery(@NonNull final String table, @NonNull String sql,
       @NonNull String... args) {
-    Predicate<Set<String>> tableFilter = new Predicate<Set<String>>() {
-      @Override public boolean test(Set<String> triggers) {
-        return triggers.contains(table);
-      }
-
-      @Override public String toString() {
-        return table;
-      }
-    };
-    return createQuery(tableFilter, sql, args);
+    return createQuery(new SingleTablePredicate(table), sql, args);
   }
 
   /**
@@ -341,21 +338,7 @@ public final class BriteDatabase implements Closeable {
   @CheckResult @NonNull
   public QueryObservable createQuery(@NonNull final Iterable<String> tables, @NonNull String sql,
       @NonNull String... args) {
-    Predicate<Set<String>> tableFilter = new Predicate<Set<String>>() {
-      @Override public boolean test(Set<String> triggers) {
-        for (String table : tables) {
-          if (triggers.contains(table)) {
-            return true;
-          }
-        }
-        return false;
-      }
-
-      @Override public String toString() {
-        return tables.toString();
-      }
-    };
-    return createQuery(tableFilter, sql, args);
+    return createQuery(new MultipleTablePredicate(tables), sql, args);
   }
 
   @CheckResult @NonNull
@@ -375,6 +358,32 @@ public final class BriteDatabase implements Closeable {
         .compose(queryTransformer) // Apply the user's query transformer.
         .doOnSubscribe(ensureNotInTransaction)
         .to(QUERY_OBSERVABLE);
+  }
+
+  /**
+   * Create an observable which will emit when the supplied {@code table}'s data changes. See
+   * {@link #createQuery(String, String, String...)} for details on emission as well as the
+   * {@link Scheduler} used.
+   */
+  @CheckResult @NonNull
+  public Observable<Object> changes(@NonNull String table) {
+    return triggers //
+        .filter(new SingleTablePredicate(table)) // Only trigger on tables we care about.
+        .observeOn(scheduler) //
+        .map(TO_MARKER_OBJECT);
+  }
+
+  /**
+   * Create an observable which will emit when any of the supplied {@code tables}' data changes.
+   * See {@link #createQuery(String, String, String...)} for details on emission as well as the
+   * {@link Scheduler} used.
+   */
+  @CheckResult @NonNull
+  public Observable<Object> changes(@NonNull Iterable<String> tables) {
+    return triggers //
+        .filter(new MultipleTablePredicate(tables)) // Only trigger on tables we care about.
+        .observeOn(scheduler) //
+        .map(TO_MARKER_OBJECT);
   }
 
   /**
@@ -767,6 +776,43 @@ public final class BriteDatabase implements Closeable {
     @Override public String toString() {
       String name = String.format("%08x", System.identityHashCode(this));
       return parent == null ? name : name + " [" + parent.toString() + ']';
+    }
+  }
+
+  private static class SingleTablePredicate implements Predicate<Set<String>> {
+    private final String table;
+
+    SingleTablePredicate(String table) {
+      this.table = table;
+    }
+
+    @Override public boolean test(Set<String> triggers) {
+      return triggers.contains(table);
+    }
+
+    @Override public String toString() {
+      return table;
+    }
+  }
+
+  private static class MultipleTablePredicate implements Predicate<Set<String>> {
+    private final Iterable<String> tables;
+
+    MultipleTablePredicate(Iterable<String> tables) {
+      this.tables = tables;
+    }
+
+    @Override public boolean test(Set<String> triggers) {
+      for (String table : tables) {
+        if (triggers.contains(table)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    @Override public String toString() {
+      return tables.toString();
     }
   }
 

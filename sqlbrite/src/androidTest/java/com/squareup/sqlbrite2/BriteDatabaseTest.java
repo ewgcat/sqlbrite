@@ -33,6 +33,7 @@ import io.reactivex.Observable;
 import io.reactivex.ObservableSource;
 import io.reactivex.ObservableTransformer;
 import io.reactivex.functions.Consumer;
+import io.reactivex.observers.TestObserver;
 import io.reactivex.subjects.PublishSubject;
 import java.io.Closeable;
 import java.io.IOException;
@@ -45,7 +46,6 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import org.junit.After;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -206,6 +206,19 @@ public final class BriteDatabaseTest {
         .hasRow("eve", "Eve Evenson")
         .hasRow("john", "John Johnson")
         .isExhausted();
+  }
+
+  @Test public void tableChangesUsesScheduler() {
+    scheduler.runTasksImmediately(false);
+
+    TestObserver<Object> o = db.changes(TABLE_EMPLOYEE).test();
+    scheduler.triggerActions();
+    o.assertNoValues(); // No initial trigger.
+
+    db.insert(TABLE_EMPLOYEE, employee("john", "John Johnson"));
+    o.assertNoValues(); // Posted to scheduler but not run.
+    scheduler.triggerActions();
+    o.assertValueCount(1);
   }
 
   @Test public void queryNotNotifiedWhenInsertFails() {
